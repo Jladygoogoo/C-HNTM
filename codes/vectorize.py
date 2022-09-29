@@ -1,10 +1,16 @@
+import os
+import time
+import pickle
+import numpy as np
+from tqdm import tqdm
 import torch
-from gensim.models import Word2Vec
+import gensim.downloader as api
+from gensim.models import KeyedVectors
 from transformers import BertTokenizer, BertModel
 
 
 
-class PretrainBERT:
+class BERTVectorizer:
     def __init__(self, model_path=None, n_layers=4, mode="mean") -> None:
         self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
         self.layers = list(range(-n_layers, 0))
@@ -34,22 +40,99 @@ class PretrainBERT:
             word_embedding = word_embedding.detach().numpy()
         return word_embedding
     
+
+
+
+class W2vVectorizer:
+    def __init__(self):
+        start_time = time.time()
+        print("Word2Vec: start loading.")
+        self.model = KeyedVectors.load_word2vec_format('../models/embedding_model/GoogleNews-vectors-negative300.bin', binary=True) 
+        print("Word2Vec: loaded. use {:.2f}s".format(time.time()-start_time))
+    
+    def has_word(self, word):
+        return self.model.has_index_for(word)
+
+    def get_embedding(self, word):
+        return self.model[word]
+
+
+
+class GloveVectorizer:
+    def __init__(self):
+        print("Glove: start loading...")
+        start_time = time.time()
+        # self.model = api.load('glove-twitter-200')
+        self.model = KeyedVectors.load_word2vec_format('../models/embedding_model/glove-twitter-200.gz') 
+        print("Glove: loaded. use {:.2f}s".format(time.time()-start_time))
+    
+    def has_word(self, word):
+        return self.model.has_index_for(word)
+
+    def get_embedding(self, word):
+        return self.model[word]
+
+
+
+class FastTextVectorizer:
+    def __init__(self) -> None:
+        pass
+
     def has_word(self, word):
         return True
 
-
-
-class PretrainWord2Vec:
-    def __init__(self):
-        self.model = Word2Vec.load("/Users/inkding/程序/my-projects/毕设-网易云评论多模态/netease2/models/w2v/c4.mod")
-    
-    def has_word(self, word):
-        return self.model.wv.__contains__(word)
-
     def get_embedding(self, word):
-        return self.model.wv[word]
+        return None
+
+
+
+def vectorize(dict_path, embed_model):
+    '''
+    miss count record:
+    + 20news
+        - w2v: 10
+        - glove: 7
+        - fasttext
+    + wiki103
+        - w2v: 975
+        - glove: 369
+        - fasttext
+    + ag_news
+        - w2v: 722
+        - glove: 139
+        - fasttext
+    '''
+    dict_dir = os.path.dirname(dict_path)
+    dict_name = os.path.basename(dict_path)
+    vecs_path = os.path.join(dict_dir, "{}_{}_vecs.pkl".format('_'.join(dict_name.split('.')[0].split('_')[:-1]), embed_model))
+    with open(dict_path, 'rb') as f:
+        dictionary = pickle.load(f)
+    vocab = [word for word in dictionary.token2id]
+
+    if embed_model == "w2v":
+        vectorizer = W2vVectorizer()
+        embed_dim = 300
+    if embed_model == "glove":
+        vectorizer = GloveVectorizer()
+        embed_dim = 200
+
+    miss_count = 0
+    vecs = []
+    for word in tqdm(vocab):
+        if vectorizer.has_word(word) == False:
+            # print(word)
+            miss_count += 1
+            vecs.append(np.random.rand(embed_dim))
+        else:
+            vecs.append(vectorizer.get_embedding(word))
+    print("miss count:", miss_count)
+
+    with open(vecs_path, 'wb') as f:
+        pickle.dump(vecs, f)
+
 
 
 if __name__ == "__main__":
-    model_path = "../models/bert/wiki103_bert.pt"
-    bert = PretrainBERT(model_path=model_path)
+    embed_model = "glove"
+    dict_path = "../data/ag_news/ag_news_keep-10000_dictionary.pkl"
+    vectorize(dict_path, embed_model)

@@ -16,7 +16,7 @@ nlp = spacy.load("en_core_web_sm")
 
 
 import utils
-from vectorize import PretrainBERT
+from vectorize import BERTVectorizer
 
 
 def my_tokenize(text, stopwords):
@@ -174,7 +174,7 @@ def preprocess_and_save_from_raw_docs(raw_train_docs, raw_test_docs, keep_n, bas
 
     # vectorize
     utils.print_log("Start vectorizing...")
-    embedding_model = PretrainBERT()
+    embedding_model = BERTVectorizer()
     vecs = []
     for word in tqdm(dictionary.token2id.keys()):
         vecs.append(embedding_model.get_embedding(word))
@@ -308,7 +308,7 @@ def preprocess_mxm():
 
     # vectorize
     utils.print_log("Start vectorizing...")
-    embedding_model = PretrainBERT()
+    embedding_model = BERTVectorizer()
     vecs = []
     for word in tqdm(dictionary.token2id.keys()):
         vecs.append(embedding_model.get_embedding(word))
