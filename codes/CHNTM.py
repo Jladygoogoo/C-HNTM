@@ -1,5 +1,3 @@
-from math import gamma
-from turtle import forward
 import torch
 import torch.nn as nn 
 import torch.nn.functional as F
@@ -127,22 +125,29 @@ class C_HNTM(nn.Module):
 
 
     @property
-    def weights(self):
-        return torch.softmax(self.gmm_pi, dim=0)         
+    def gmm_weights(self):
+        return torch.softmax(self.gmm_pi, dim=0)
+
+    @property
+    def dependency_weights(self):
+        '''
+        Return dependency matrix softmax weights, shape = (n_global_topics, n_local_topics)
+        '''
+        return F.softmax(self.dependency.weight, dim=0).T
 
     def forward(self, x):
         return self.vae(x)
 
-    def loss(self, x, logits, mu, logvar, vecs):
+    def loss(self, x, logits, mu, logvar, vecs, global_topic_weights):
         '''
         x: size=(batch_size, vocab_size)
         mu: size=(batch_size, n_topic_leaf)
         logvar: size=(batch_size, n_topic_leaf)
         vecs: size=(vocab_size, embed_dim)
+        global_topic_weights: shape=(n_topic_global)
         '''
-        batch_size = x.shape[0]
-        dependency = F.softmax(self.dependency.weight, dim=0).T # size=(n_topic_root, n_topic_leaf)
-        n_topic_leaf = dependency.shape[1]
+        dependency = self.dependency_weights
+        batch_size = len(x)
 
         # tau size=(batch_size, n_topic_root)
         # q(z_i|x)
@@ -151,22 +156,21 @@ class C_HNTM(nn.Module):
 
         # gamma
         # q(r_i|x)
-        gamma = utils.predict_proba_gmm_doc(x, vecs, self.gmm_mu, torch.exp(self.gmm_logvar), self.weights)
-        # print(value)
-        # print(gamma)
+        gamma = utils.predict_proba_gmm_doc(x, vecs, self.gmm_mu, torch.exp(self.gmm_logvar), self.gmm_weights, global_topic_weights)
 
         # (1)
         # p(x|z)
-        l1_weight = 0.01
-        l1 = torch.sum(x*torch.log(logits)) * l1_weight
+        # l1_weight = 0.01
+        l1_weight = 1
+        l1 = torch.sum(x*torch.log(logits)) / batch_size
         # (2)
         l2 = torch.sum(gamma * torch.mm(tau, torch.log(dependency.T)))
         # (3)
-        l3 = torch.sum(torch.mm(gamma, torch.log(self.weights).unsqueeze(1))) # 注意此处使用self.weights而不是self.gmm_pi
+        l3 = torch.sum(torch.mm(gamma, torch.log(self.gmm_weights).unsqueeze(1))) # 注意此处使用self.weights而不是self.gmm_pi
         # (4)
         l4 = torch.sum(tau * torch.log(tau))
         # (5)
-        l5 = torch.sum(gamma * torch.log(gamma))
+        l5 = torch.sum(gamma * torch.log(gamma+1e-8))
 
         # dependency loss 用于避免dependency矩阵的趋同化
         cor_mtx = torch.matmul(dependency, dependency.T)
@@ -175,7 +179,7 @@ class C_HNTM(nn.Module):
         norm_cor_mtx = cor_mtx / norm_deno
         dependency_loss = torch.sum(norm_cor_mtx)
 
-        loss = -(l1 + l2 + l3 - l4 - l5)
+        # loss = -(l1 + l2 + l3 - l4 - l5)
         loss = -(l1 + l2 + l3 - l4 - l5) + dependency_loss
 
         loss_dict = {

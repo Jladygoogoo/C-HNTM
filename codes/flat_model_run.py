@@ -12,9 +12,7 @@ from torch.utils.data import DataLoader
 # from torch.optim import SGD
 import utils
 import flat_model as model
-from dataset.news20_dataset import NewsDataset
-from dataset.wiki103_dataset import Wikitext103Dataset
-from dataset.reuters_dataset import ReutersDataset
+from my_dataset import MyDataset
 
 
 class Runner:
@@ -22,30 +20,33 @@ class Runner:
         '''
         载入参数和数据集
         '''
+        self.args = args
         self.device = utils.get_device(args.device) # device=-1表示cpu，其他表示gpu序号
-        print("使用device:", self.device)
-        self.save_path = "../models/{}/{}_{}.pkl".format(
-            args.model, args.model,
-            args.data,
-            # time.strftime("%Y-%m-%d-%H", time.localtime())
+        utils.print_log("device: {}".format(self.device))
+        self.model_save_path = "../models/{}/{}_{}_{}.pt".format(
+                args.model,
+                args.model,
+                args.data,
+                time.strftime("%y%m%d%H%M", time.localtime())
             )
-        utils.get_or_create_path(self.save_path)
+        utils.print_log("Model will be saved in {}".format(self.model_save_path))
+        self.checkpoint_dir = "../models/{}/.ckpt/".format(args.model)
+        utils.get_or_create_path(self.model_save_path)
+        utils.get_or_create_path(self.checkpoint_dir)
         
-        # 加载数据
+        # load data
         self.data_source_name = args.data
-        if args.data == "20news":
-            self.dataset = NewsDataset()
-        if args.data == "wiki103":
-            self.dataset = Wikitext103Dataset()
-        if args.data == "reuters":
-            self.dataset = ReutersDataset()
-
-        self.dataloader = DataLoader(self.dataset, batch_size=args.batch_size, shuffle=True)
+        self.dataset = MyDataset(self.data_source_name)
         self.vecs = torch.tensor(np.array(self.dataset.vecs)).to(self.device)
-        print("数据集: {}".format(self.data_source_name))
-        print("数据集大小: {}, 词典大小: {}".format(len(self.dataset), self.dataset.vocab_size))
+        self.train_dataloader = DataLoader(self.dataset.train_load_dataset, batch_size=args.batch_size, shuffle=True)
+        self.test_dataloader = DataLoader(self.dataset.test_load_dataset, batch_size=args.batch_size, shuffle=True)
 
-        # 加载常用参数
+        utils.print_log("Loading data from dataset-[{}]".format(self.data_source_name))
+        utils.print_log("dictionary size: {} | train size: {} | test size: {}".format(
+            self.dataset.vocab_size, len(self.dataset.train_load_dataset), len(self.dataset.test_load_dataset)
+        ))
+
+        # model args
         self.args = args
         self.vocab_size = self.dataset.vocab_size
         self.num_topics = args.num_topics        
@@ -54,16 +55,33 @@ class Runner:
     def train(self):
         pass
     
-    def evaluate(self, model):
-        topic_words = self.get_topic_words(model)
-        coherence_score = utils.get_coherence(self.get_beta(model), self.dataset.doc_mtx)
-        diversity_score = utils.calc_topic_diversity(topic_words)
+
+    def evaluate(self, model, doc_mtx):
+        '''
+        model: vae model(gsm)
+        '''
+        beta = self.get_beta(model)
+        coherence_score = utils.get_coherence(beta, doc_mtx)
+        diversity_score = utils.get_diversity(beta)
         metric_dict = {
             "topic_coherence": coherence_score,
             "topic_diversity": diversity_score
         }
 
         return metric_dict
+
+
+    def get_local_topic_words_idx(self, model):
+        '''
+        Get local topic words index matrix
+        param: model: VAE
+        return: words_index_matrix: shape=(n_topic, self.args.topk_words)
+        '''
+        p_matrix_beta = model.decode(torch.eye(self.args.num_topics).to(self.device))
+        _, words_index_matrix = torch.topk(p_matrix_beta, k=self.args.topk_words, dim=1)
+        words_index_matrix = words_index_matrix.detach().cpu().numpy()
+     
+        return words_index_matrix
 
 
     def get_topic_words(self, model):
@@ -91,20 +109,23 @@ class Runner:
 class NVDM_GSM_Runner(Runner):
     def __init__(self, args):
         super(NVDM_GSM_Runner, self).__init__(args)
-        hidden_dim = 256 # 和CHNTM的设置一致
+        hidden_dim = 256
         self.model = model.NVDM_GSM(
             encode_dims=[self.vocab_size, 1024, 512, self.num_topics],
             hidden_dim=hidden_dim
         )
+        if self.args.resume_train_path is not None:
+            self.model.load_state_dict(torch.load(self.args.resume_train_path))
+            utils.print_log("Resume Training from: {}".format(self.args.resume_train_path))
         self.model.to(self.device)
 
     def train(self):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.lr)
         for epoch in range(self.args.num_epochs):
             epoch_loss = []
-            for data in self.dataloader:
+            for data in self.train_dataloader:
                 optimizer.zero_grad()
-                doc, bows = data
+                bows = data
                 x = bows
                 x = x.to(self.device)
                 prob, mu, logvar = self.model(x)
@@ -113,28 +134,60 @@ class NVDM_GSM_Runner(Runner):
                 loss.backward()
                 optimizer.step()
                 epoch_loss.append(loss.item()/len(bows))
+
+            utils.print_log("Epoch-[{}]".format(epoch))
             # loss
             avg_epoch_loss =sum(epoch_loss)/len(epoch_loss) 
             utils.wandb_log("loss", {"loss": avg_epoch_loss}, self.args.wandb)
-            print("Epoch {} AVG Loss: {:.6f}".format(
-                epoch+1, 
-                avg_epoch_loss))
+            utils.print_log("Loss: {:.6f}".format(avg_epoch_loss))
+
             # metric
             if (epoch+1) % self.args.metric_log_interval == 0:
-                metric_dict = self.evaluate(self.model)
+                metric_dict = self.evaluate(self.model, self.dataset.train_doc_mtx)
                 utils.wandb_log("metric", metric_dict, self.args.wandb)
-                print("Epoch {} AVG Coherence(NPMI): {:.6f} AVG Diversity: {:.6f}".format(
-                    epoch+1, 
+                utils.print_log("Coherence(NPMI): {:.6f} | Diversity: {:.6f}".format(
                     metric_dict["topic_coherence"], 
                     metric_dict["topic_diversity"]))
+
+            # test
+            if (epoch+1) % self.args.test_interval == 0:
+                utils.print_log("======= Test =======")
+                with torch.no_grad():
+                    loss_list = []
+                    for batch_data in self.test_dataloader:
+                        x = batch_data
+                        x = x.to(self.device)
+                        d_given_theta, mu, logvar = self.model(x)
+                        loss = self.model.loss(x, d_given_theta, mu, logvar)
+                        loss_list.append(loss.item()/len(x))
+                    avg_loss = np.mean(loss_list)
+                utils.wandb_log("test/loss", {"loss": avg_loss}, self.args.wandb)
+                utils.print_log("Loss: {:.6f}".format(avg_loss))                
+                # test data
+                metric_dict = self.evaluate(self.model, self.dataset.test_doc_mtx)
+                utils.wandb_log("test/metric", metric_dict, self.args.wandb)
+                utils.print_log("Coherence(NPMI): {:.6f} | Diversity: {:.6f}".format(
+                    metric_dict["topic_coherence"], 
+                    metric_dict["topic_diversity"]))   
+                utils.print_log("====================")    
+
+
             # topic words
             if (epoch+1) % self.args.topic_log_interval == 0:
-                for i, words in enumerate(self.get_topic_words(self.model)):
-                    print("topic-{}: {}".format(i, words))
+                utils.print_log("Topic results:")
+                for i, idxs in enumerate(self.get_local_topic_words_idx(self.model)):
+                    print("topic-{}: {}".format(i, utils.get_words_by_idx(self.dataset.dictionary, idxs)))
 
-        torch.save(self.model.state_dict(), self.save_path)
-        print("将model参数保存至", self.save_path)
+            # checkpoint
+            if (epoch+1) % self.args.checkpoint_interval == 0:
+                ckpt_path = os.path.join(self.checkpoint_dir, "{}_{}_{}_{}.ckpt".format(
+                    self.args.model, self.args.data, time.strftime("%y%m%d%H%M", time.localtime()), epoch+1))
+                torch.save(self.model.state_dict(), ckpt_path)
+                utils.print_log("Checkpoint saved: {}".format(ckpt_path))                    
+ 
 
+        torch.save(self.model.state_dict(), self.model_save_path)
+        utils.print_log("{} saved: {}".format(self.args.model, self.model_save_path))
 
 
 
@@ -152,9 +205,9 @@ class AVITM_Runner(Runner):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.lr)
         for epoch in range(self.args.num_epochs):
             epoch_loss = []
-            for data in self.dataloader:
+            for data in self.train_dataloader:
                 optimizer.zero_grad()
-                doc, bows = data
+                bows = data
                 x = bows
                 x = x.to(self.device)
                 prob, mu, logvar = self.model(x)
@@ -163,27 +216,59 @@ class AVITM_Runner(Runner):
                 loss.backward()
                 optimizer.step()
                 epoch_loss.append(loss.item()/len(bows))
+
+            utils.print_log("Epoch-[{}]".format(epoch))
             # loss
             avg_epoch_loss =sum(epoch_loss)/len(epoch_loss) 
             utils.wandb_log("loss", {"loss": avg_epoch_loss}, self.args.wandb)
-            print("Epoch {} AVG Loss: {:.6f}".format(
-                epoch+1, 
-                avg_epoch_loss))
+            utils.print_log("Loss: {:.6f}".format(avg_epoch_loss))
+
             # metric
             if (epoch+1) % self.args.metric_log_interval == 0:
-                metric_dict = self.evaluate(self.model)
+                metric_dict = self.evaluate(self.model, self.dataset.train_doc_mtx)
                 utils.wandb_log("metric", metric_dict, self.args.wandb)
-                print("Epoch {} AVG Coherence(NPMI): {:.6f} AVG Diversity: {:.6f}".format(
-                    epoch+1, 
+                utils.print_log("Coherence(NPMI): {:.6f} | Diversity: {:.6f}".format(
                     metric_dict["topic_coherence"], 
                     metric_dict["topic_diversity"]))
+
+            # test
+            if (epoch+1) % self.args.test_interval == 0:
+                utils.print_log("======= Test =======")
+                with torch.no_grad():
+                    loss_list = []
+                    for batch_data in self.test_dataloader:
+                        x = batch_data
+                        x = x.to(self.device)
+                        d_given_theta, mu, logvar = self.model(x)
+                        loss = self.model.loss(x, d_given_theta, mu, logvar)
+                        loss_list.append(loss.item()/len(x))
+                    avg_loss = np.mean(loss_list)
+                utils.wandb_log("test/loss", {"loss": avg_loss}, self.args.wandb)
+                utils.print_log("Loss: {:.6f}".format(avg_loss))                
+                # test data
+                metric_dict = self.evaluate(self.model, self.dataset.test_doc_mtx)
+                utils.wandb_log("test/metric", metric_dict, self.args.wandb)
+                utils.print_log("Coherence(NPMI): {:.6f} | Diversity: {:.6f}".format(
+                    metric_dict["topic_coherence"], 
+                    metric_dict["topic_diversity"]))   
+                utils.print_log("====================")    
+
             # topic words
             if (epoch+1) % self.args.topic_log_interval == 0:
-                for i, words in enumerate(self.get_topic_words(self.model)):
-                    print("topic-{}: {}".format(i, words))
+                utils.print_log("Topic results:")
+                for i, idxs in enumerate(self.get_local_topic_words_idx(self.model)):
+                    print("topic-{}: {}".format(i, utils.get_words_by_idx(self.dataset.dictionary, idxs)))
 
-        torch.save(self.model.state_dict(), self.save_path)
-        print("将model参数保存至", self.save_path)
+            # checkpoint
+            if (epoch+1) % self.args.checkpoint_interval == 0:
+                ckpt_path = os.path.join(self.checkpoint_dir, "{}_{}_{}_{}.ckpt".format(
+                    self.args.model, self.args.data, time.strftime("%y%m%d%H%M", time.localtime()), epoch+1))
+                torch.save(self.model.state_dict(), ckpt_path)
+                utils.print_log("Checkpoint saved: {}".format(ckpt_path))
+ 
+
+        torch.save(self.model.state_dict(), self.model_save_path)
+        utils.print_log("{} saved: {}".format(self.args.model, self.model_save_path))
 
 
 
@@ -199,6 +284,10 @@ class ETM_Runner(Runner):
             embed_dim=rho_init.shape[1],
             rho_init=rho_init,
         )
+        if self.args.resume_train_path is not None:
+            self.model.load_state_dict(torch.load(self.args.resume_train_path))
+            utils.print_log("Resume Training from: {}".format(self.args.resume_train_path))
+
         self.model.to(self.device)
 
         # 减小词向量rho矩阵的学习速度
@@ -215,9 +304,9 @@ class ETM_Runner(Runner):
         optimizer = torch.optim.Adam(self.params, lr=self.args.lr)
         for epoch in range(self.args.num_epochs):
             epoch_loss = []
-            for data in self.dataloader:
+            for data in self.train_dataloader:
                 optimizer.zero_grad()
-                doc, bows = data
+                bows = data
                 x = bows
                 x = x.to(self.device)
                 prob, mu, logvar = self.model(x)
@@ -226,26 +315,60 @@ class ETM_Runner(Runner):
                 loss.backward()
                 optimizer.step()
                 epoch_loss.append(loss.item()/len(bows))
+
+            utils.print_log("Epoch-[{}]".format(epoch))
             # loss
             avg_epoch_loss =sum(epoch_loss)/len(epoch_loss) 
             utils.wandb_log("loss", {"loss": avg_epoch_loss}, self.args.wandb)
-            print("Epoch {} AVG Loss: {:.6f}".format(
-                epoch+1, 
-                avg_epoch_loss))
+            utils.print_log("Loss: {:.6f}".format(avg_epoch_loss))
+
             # metric
             if (epoch+1) % self.args.metric_log_interval == 0:
-                metric_dict = self.evaluate(self.model)
+                metric_dict = self.evaluate(self.model, self.dataset.train_doc_mtx)
                 utils.wandb_log("metric", metric_dict, self.args.wandb)
-                print("Epoch {} AVG Coherence(NPMI): {:.6f} AVG Diversity: {:.6f}".format(
-                    epoch+1, 
+                utils.print_log("Coherence(NPMI): {:.6f} | Diversity: {:.6f}".format(
                     metric_dict["topic_coherence"], 
                     metric_dict["topic_diversity"]))
+
+
+            # test
+            if (epoch+1) % self.args.test_interval == 0:
+                utils.print_log("======= Test =======")
+                with torch.no_grad():
+                    loss_list = []
+                    for batch_data in self.test_dataloader:
+                        x = batch_data
+                        x = x.to(self.device)
+                        d_given_theta, mu, logvar = self.model(x)
+                        loss = self.model.loss(x, d_given_theta, mu, logvar)
+                        loss_list.append(loss.item()/len(x))
+                    avg_loss = np.mean(loss_list)
+                utils.wandb_log("test/loss", {"loss": avg_loss}, self.args.wandb)
+                utils.print_log("Loss: {:.6f}".format(avg_loss))                
+                # test data
+                metric_dict = self.evaluate(self.model, self.dataset.test_doc_mtx)
+                utils.wandb_log("test/metric", metric_dict, self.args.wandb)
+                utils.print_log("Coherence(NPMI): {:.6f} | Diversity: {:.6f}".format(
+                    metric_dict["topic_coherence"], 
+                    metric_dict["topic_diversity"]))   
+                utils.print_log("====================")     
+
+
             # topic words
             if (epoch+1) % self.args.topic_log_interval == 0:
-                for i, words in enumerate(self.get_topic_words(self.model)):
-                    print("topic-{}: {}".format(i, words))
+                utils.print_log("Topic results:")
+                for i, idxs in enumerate(self.get_local_topic_words_idx(self.model)):
+                    print("topic-{}: {}".format(i, utils.get_words_by_idx(self.dataset.dictionary, idxs)))
 
-        torch.save(self.model.state_dict(), self.save_path)
-        print("将model参数保存至", self.save_path)           
+            # checkpoint
+            if (epoch+1) % self.args.checkpoint_interval == 0:
+                ckpt_path = os.path.join(self.checkpoint_dir, "{}_{}_{}_{}.ckpt".format(
+                    self.args.model, self.args.data, time.strftime("%y%m%d%H%M", time.localtime()), epoch+1))
+                torch.save(self.model.state_dict(), ckpt_path)
+                utils.print_log("Checkpoint saved: {}".format(ckpt_path))                    
+
+
+        torch.save(self.model.state_dict(), self.model_save_path)
+        utils.print_log("{} saved: {}".format(self.args.model, self.model_save_path))      
 
 

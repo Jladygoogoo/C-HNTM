@@ -1,6 +1,8 @@
 /models
-/result
+/results
 /data
 raw
 __pycache__
 *DS_Store
+wandb*
+*.pkl

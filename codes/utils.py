@@ -1,6 +1,9 @@
 import os
 import wandb
+from datetime import datetime
 import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+from sklearn import metrics
 import torch
 import torch.nn.functional as F
 # torch.set_printoptions(threshold=np.inf)
@@ -24,6 +27,10 @@ def get_or_create_path(path):
     if not os.path.exists(dir_path):
         os.makedirs(dir_path)
     return path
+
+
+def load_checkpoint(model, checkpoint_path):
+    model.load_state_dict(torch.load(checkpoint_path))
 
 
 def calc_topic_diversity(topic_words):
@@ -140,6 +147,32 @@ def get_coherence(beta, doc_mat, N_list=[5,10,15]):
     return average_coherence
 
 
+def get_diversity(beta, N_list=[5,10,15]):
+    n_topic, vocab_size = beta.shape
+    score = 0
+    for N in N_list:
+        TU = 0.0
+        topic_list = []
+        for topic_idx in range(n_topic):
+            top_word_idx = np.argpartition(beta[topic_idx, :], -N)[-N:]
+            topic_list.append(top_word_idx)
+        TU= 0
+        cnt =[0 for i in range(vocab_size)]
+        for topic in topic_list:
+            for word in topic:
+                cnt[word]+=1
+        for topic in topic_list:
+            TU_t = 0
+            for word in topic:
+                TU_t += 1/cnt[word]
+            TU_t /= N
+            TU += TU_t
+        TU /= n_topic
+        score += TU
+
+    score /= len(N_list)    
+    return score
+
 
 def get_CLNPMI_and_OR(root_beta, leaf_beta, root_leaf_mtx, doc_mat, n_children=3, n_words=10):
     '''
@@ -199,6 +232,30 @@ def get_topic_specialization(beta, doc_mat):
     topics_spec = 1 - beta.dot(doc_words_mtx)
     res = np.mean(topics_spec)
     return res
+
+
+def get_silhouette_coefficient(X, labels):
+    '''
+    With the ground truth labels not known, a higher Silhouette Coefficient score relates to 
+    a model with better defined clusters. 
+    param: X: data samples
+    param: labels: data sample labels predicted by the clustering model   
+    return: score: float
+    '''
+    score = metrics.silhouette_score(X, labels, metric='euclidean')
+    return score
+
+def get_CHI(X, labels):
+    '''
+    Calinski-Harabasz score, also known as the Variance Ratio Criterion.
+    With the ground truth labels not known, a higher Calinski-Harabasz score relates to 
+    a model with better defined clusters. 
+    param: X: data samples
+    param: labels: data sample labels predicted by the clustering model   
+    return: score: float
+    '''    
+    score = metrics.calinski_harabasz_score(X, labels)
+    return score
 
 
 def random_cluster_vec_init(n_clusters=30):
@@ -261,18 +318,40 @@ def _predict_proba_gmm(X, means, precision_chol, weights):
     return torch.exp(log_resp)
 
 
-def predict_proba_gmm_X(vecs, means, covariances, weights):
+def gmm_predict_proba_X(vecs, means, covariances, weights):
     '''
-    获得一组x的高斯分布概率
-    vecs.shape = (n_words, embed_dim)
-    return: (n_words, n_components)
+    Evaluate the components' density for each sample(word vector).
+    params:
+        vecs: data samples, shape = (n_samples, n_features)
+        means: the mean of each mixture component in GMM, shape = (n_components, n_features)
+        covariances: the covariance of each mixture component in GMM, shape = (n_components, n_features)
+        weights: the weights of each mixture components in GMM, shape = (n_components,)
+    return: 
+        proba_mtx: shape = (n_samples, n_components)
     '''
     precision_chol = 1. / torch.sqrt(covariances)
     _, log_resp = _estimate_log_prob_resp(vecs, means, precision_chol, weights)
-    return torch.exp(log_resp)
+    proba_mtx = torch.exp(log_resp)
+    return proba_mtx
 
 
-def predict_proba_gmm_doc(doc_X, vecs, means, covariances, weights):
+def gmm_predict_proba_topic(vecs, means, covariances, weights):
+    '''
+    Evaluate samples distribution over topics for GMM. The inverse of gmm_predict_proba_X.
+    params:
+        vecs: data samples, shape = (n_samples, n_features)
+        means: the mean of each mixture component in GMM, shape = (n_components, n_features)
+        covariances: the covariance of each mixture component in GMM, shape = (n_components, n_features)
+        weights: the weights of each mixture components in GMM, shape = (n_components,)
+    return: 
+        proba_mtx: shape = (n_components, n_samples)    
+    '''
+    X_proba_mtx = gmm_predict_proba_X(vecs, means, covariances, weights)
+    topic_proba_mtx = F.softmax(X_proba_mtx.T, dim=1)
+    return topic_proba_mtx
+
+
+def predict_proba_gmm_doc(doc_X, vecs, means, covariances, weights, topic_weights):
     '''
     获得p(t|x)，即在文档的条件下顶层主题的概率，等于文档中所有词的条件下顶层主题概率累积
     params:
@@ -290,13 +369,14 @@ def predict_proba_gmm_doc(doc_X, vecs, means, covariances, weights):
     #     proba_gmm_doc = torch.mean(_predict_proba_gmm(word_vecs, means, precision_chol, weights), axis=0)
     #     res.append(proba_gmm_doc)
     # res = torch.stack(res)
-    # return res
+    # return res  
     res = []
     for i in range(len(doc_X)):
         word_vecs = vecs[torch.where(doc_X[i]>0)]
-        proba_gmm_words = predict_proba_gmm_X(word_vecs, means, covariances, weights)
-        proba_gmm_doc = 1 - (1-proba_gmm_words-1e-6).prod(dim=0)
-        proba_gmm_doc = F.softmax(proba_gmm_doc, dim=0)
+        proba_gmm_words = gmm_predict_proba_X(word_vecs, means, covariances, weights)
+        # proba_gmm_doc = 1 - (1-proba_gmm_words-1e-6).prod(dim=0)
+        proba_gmm_doc = proba_gmm_words.sum(dim=0) * topic_weights
+        proba_gmm_doc = F.softmax(proba_gmm_doc, dim=0).float()
         res.append(proba_gmm_doc)
     return torch.stack(res)
 
@@ -398,12 +478,57 @@ def get_words_cor_mtx(words1, words2, dictionary, vecs):
     return cor_mtx
 
 
+def cal_dependency_score(words_idx1, words_idx2, vecs):
+    '''
+    Calculate the dependency score of 2 lists of words based on cosine similarity
+    param:
+        words_idx1: list of int
+        words_idx2: list of int
+        dictioanry: gensim dictionary
+        vecs: Tensor, vectors of all words
+    return: score: float
+    '''
+    vecs1 = vecs[torch.Tensor(words_idx1).long()]
+    vecs2 = vecs[torch.Tensor(words_idx2).long()]
+    cor_mtx = torch.mm(vecs1, vecs2.T)
+    cor_mtx = cor_mtx / torch.norm(vecs1, dim=1).unsqueeze(dim=1)
+    cor_mtx = cor_mtx / torch.norm(vecs2, dim=1).unsqueeze(dim=0)
+    score = torch.mean(cor_mtx)
+    return score
+
+
+
+def get_words_by_idx(dictionary, idxs):
+    '''
+    Get word list by their indices in dictionary
+    param: dictionary: gensim dictionary
+    param: idxs: list of int
+    return: words: list of str
+    '''
+    words = [dictionary.id2token[i] for i in idxs]
+    return words
+
+
+def min_max_scale(x, feature_range=(0,1)):
+    '''
+    将x缩放至指定区间
+    '''
+    scaler = MinMaxScaler(feature_range)
+    new_x = scaler.fit_transform(np.array([x]).T).T[0]
+    return new_x
+
 
 
 def wandb_log(type, log_dict, wandb_flag=True):
     if wandb_flag:
         new_log_dict = {"{}/{}".format(type, k): v for k,v in log_dict.items()}
         wandb.log(new_log_dict)
+
+
+def print_log(s):
+    time_str = datetime.now().strftime("%m-%d %H:%M:%S")
+    author = "wnj"
+    print("[{}][{}] {}".format(author, time_str, s))
 
 
 if __name__ == "__main__":

@@ -1,23 +1,12 @@
-from math import floor
 import pickle
-import matplotlib.pyplot as plt
-import nltk
-
-dict_path = "../data/20news/20news_no_below-100_dictionary.pkl"
+from gensim.corpora import Dictionary
+from gensim.corpora.mmcorpus import MmCorpus
+dict_path = "../data/20news/20news_keep-2000_dictionary.pkl"
 with open(dict_path, 'rb') as f:
     dictionary = pickle.load(f)
+# idx_df = sorted(dictionary.dfs.items(), key=lambda p:p[0])
 
-# sorted_dfs = list(sorted(dictionary.dfs.items(), key=lambda p:p[1]))
-sorted_dfs = list(sorted(dictionary.dfs.items(), key=lambda p:p[1], reverse=True))
+# for word_id, count in idx_df[:20]:
+#     print(word_id)
 
-dfs = [p[1] for p in sorted_dfs]
-
-print(dfs[floor(0.05*len(dfs))])
-
-# plt.hist(dfs, bins=20)
-# plt.show()
-
-for i in range(floor(0.05*len(dfs))):
-    p = sorted_dfs[i]
-    w = dictionary.id2token[p[0]]
-    print("{} {} {}".format(w, nltk.pos_tag([w])[0][1], p[1]))
+print(dictionary.id2token[0])
