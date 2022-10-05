@@ -5,7 +5,7 @@ import numpy as np
 from tqdm import tqdm
 import torch
 import gensim.downloader as api
-from gensim.models import KeyedVectors
+from gensim.models import KeyedVectors, fasttext
 from transformers import BertTokenizer, BertModel
 
 
@@ -76,13 +76,16 @@ class GloveVectorizer:
 
 class FastTextVectorizer:
     def __init__(self) -> None:
-        pass
+        print("FastText: start loading...")
+        start_time = time.time()
+        self.model = fasttext.load_facebook_model("")
+        print("FastText: loaded. use {:.2f}s".format(time.time()-start_time))
 
     def has_word(self, word):
-        return True
+        return self.model.has_index_for(word)
 
     def get_embedding(self, word):
-        return None
+        return self.model[word]
 
 
 

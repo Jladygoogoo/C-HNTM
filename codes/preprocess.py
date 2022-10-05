@@ -330,11 +330,27 @@ def preprocess_mxm():
     MmCorpus.serialize(test_save_path, new_test_bows)
     utils.print_log("Bows saved: {}, {}".format(train_save_path, test_save_path))    
     
-    
 
-def preprocess_reuters():
-    # raw_docs = reuters.paras()
-    return
+
+def generate_raw_docs_for_bert():
+    '''
+    generate raw documents for bert embeddings extracting.
+    '''
+    # 20news
+    raw_train_dir = "../data/20news/raw/20news-bydate/20news-bydate-train/"
+    raw_test_dir = "../data/20news/raw/20news-bydate/20news-bydate-test/"
+    raw_docs_path = "../data/20news/20news_raw_docs.pkl"
+    raw_train_docs = parse_raw_docs_20news(raw_train_dir)
+    raw_test_docs = parse_raw_docs_20news(raw_test_dir)
+    # with open(raw_docs_path, 'w', encoding='utf-8') as f:
+    #     f.write('\n'.join(raw_train_docs+raw_test_docs))    
+    with open(raw_docs_path, 'wb') as f:
+        pickle.dump(raw_train_docs+raw_test_docs, f)
+        
+    # wiki103
+
+
+
 
 
 def preprocess_rcv1():
@@ -380,7 +396,8 @@ def preprocess_rcv1():
 
 
 if __name__ == '__main__':
-    preprocess_wiki103()
+    # preprocess_wiki103()
     # preprocess_20news()
     # preprocess_mxm()
     # preprocess_agnews()
+    generate_raw_docs_for_bert()

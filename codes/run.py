@@ -32,7 +32,7 @@ class C_HNTM_Runner:
         # load data
         self.data_source_name = args.data
         self.dataset = MyDataset(self.data_source_name)
-        self.vecs = torch.tensor(np.array(self.dataset.vecs)).to(self.device)
+        self.vecs = torch.tensor(np.array(self.dataset.vecs), dtype=torch.float).to(self.device)
         self.train_dataloader = DataLoader(self.dataset.train_load_dataset, batch_size=args.batch_size, shuffle=True)
         self.test_dataloader = DataLoader(self.dataset.test_load_dataset, batch_size=args.batch_size, shuffle=True)
 

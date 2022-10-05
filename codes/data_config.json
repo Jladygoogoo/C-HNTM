@@ -1,7 +1,7 @@
 {
     "20news": {
         "dict_path": "../data/20news/20news_keep-2000_dictionary.pkl",
-        "vecs_path": "../data/20news/20news_keep-2000_vecs.pkl",
+        "vecs_path": "../data/20news/20news_keep-2000_glove_vecs.pkl",
         "bows_path": {
             "train": "../data/20news/20news_keep-2000_bows_train.mm",
             "test": "../data/20news/20news_keep-2000_bows_test.mm"
@@ -13,7 +13,7 @@
     },
     "wiki103": {
         "dict_path": "../data/wiki103/wiki103_keep-20000_dictionary.pkl",
-        "vecs_path": "../data/wiki103/wiki103_keep-20000_vecs.pkl",
+        "vecs_path": "../data/wiki103/wiki103_keep-20000_glove_vecs.pkl",
         "bows_path": {
             "train": "../data/wiki103/wiki103_keep-20000_bows_train.mm",
             "test": "../data/wiki103/wiki103_keep-20000_bows_test.mm"
@@ -25,7 +25,7 @@
     },
     "ag_news": {
         "dict_path": "../data/ag_news/ag_news_keep-10000_dictionary.pkl",
-        "vecs_path": "../data/ag_news/ag_news_keep-10000_vecs.pkl",
+        "vecs_path": "../data/ag_news/ag_news_keep-10000_glove_vecs.pkl",
         "bows_path": {
             "train": "../data/ag_news/ag_news_keep-10000_bows_train.mm",
             "test": "../data/ag_news/ag_news_keep-10000_bows_test.mm"
