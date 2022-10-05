@@ -101,6 +101,31 @@ def contruct_graph(train_url, vocabulary, output_path):
         pickle.dump(distance_index, f)
 
 
+def create_docs_for_rCRP(data_source_name):
+    '''
+    create docs file for rCRP training.
+    '''
+    if data_source_name == "20news":
+        bow_path = "../data/20news/20news_keep-2000_bows_train.mm"
+    elif data_source_name == "wiki103":
+        bow_path = "../data/wiki103/wiki103_keep-20000_bows_train.mm"
+    elif data_source_name == "ag_news":
+        bow_path = "../data/ag_news/ag_news_keep-10000_bows_train.mm"
+    output_path = "../data/others/r_crp/r_crp_{}_docs.txt".format(data_source_name)
+
+    bows = MmCorpus(bow_path)
+    output = []
+    for bow in bows:
+        doc = []
+        for idx, count in bow:
+            doc.extend([str(idx)] * int(count))
+        output.append(" ".join(doc))
+    with open(output_path, 'w') as f:
+        f.write('\n'.join(output))
+    print("Save {} docs for rCRP in {}.".format(len(output), output_path))
+
+
+
 
 if __name__ == "__main__":
     # dict_path = "../data/wiki103/wiki103_keep-10000_dictionary.pkl"
@@ -113,10 +138,13 @@ if __name__ == "__main__":
     # get_bow_feat(train_bow_path, train_feat_save_path)
     # get_bow_feat(test_bow_path, test_feat_save_path)
 
-    dataset = "wiki103"
-    data_dir = "../data/others"
-    vocabulary_path = os.path.join(data_dir, "{}.vocab".format(dataset))
-    vocabulary = load_vocab(vocab_save_path)
-    output_path = os.path.join(data_dir, "{}_train_neighbors.pickle".format(dataset))    
-    contruct_graph(train_feat_save_path, vocabulary, output_path)
+    # dataset = "wiki103"
+    # data_dir = "../data/others"
+    # vocabulary_path = os.path.join(data_dir, "{}.vocab".format(dataset))
+    # vocabulary = load_vocab(vocab_save_path)
+    # output_path = os.path.join(data_dir, "{}_train_neighbors.pickle".format(dataset))    
+    # contruct_graph(train_feat_save_path, vocabulary, output_path)
     # contruct_graph()
+
+    data = "20news"
+    create_docs_for_rCRP(data)
