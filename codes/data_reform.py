@@ -7,7 +7,7 @@
 import os
 import pickle
 import numpy as np
-from gensim.corpora.mmcorpus import MmCorpus
+#from gensim.corpora.mmcorpus import MmCorpus
 import torch
 
 def get_vocab(dict_path, save_file):
@@ -67,7 +67,7 @@ def load_vocab(filepath):
 
 
 def cal_cos_distance(m1, m2):
-    device = torch.device("cuda:0")
+    device = torch.device("cuda:1")
     m1 = torch.Tensor(m1).to(device)
     m2 = torch.Tensor(m2).to(device)
     m1 = m1 / m1.norm(dim=1)[:, None]
@@ -76,14 +76,22 @@ def cal_cos_distance(m1, m2):
     return res
 
 
-def contruct_graph(train_url, vocabulary, output_path):
+def contruct_graph(train_url, vocabulary, output_path, device):
     size = len(vocabulary)
     train_set, train_data_mat, train_count = data_set(train_url, size)
 
     n = train_data_mat.shape[0]
     print("n = ", n)
-    cos_distance_mtx = cal_cos_distance(train_data_mat, train_data_mat)
-    _, top_idx_mtx = torch.topk(cos_distance_mtx, dim=1, k=11)
+    batch_size = 20000
+    top_idx_mtx = []
+    for i in range(0, n, batch_size):
+        train_data_mat_batch = train_data_mat[i:i+batch_size]
+        cos_distance_mtx_batch = cal_cos_distance(train_data_mat_batch, train_data_mat)
+        _, top_idx_mtx_batch = torch.topk(cos_distance_mtx_batch, dim=1, k=11)
+        del cos_distance_mtx_batch
+        torch.cuda.empty_cache()
+        top_idx_mtx.append(top_idx_mtx_batch.detach().cpu().numpy())
+    top_idx_mtx = np.concatenate(top_idx_mtx)
     top_idx_mtx = top_idx_mtx[:,1:]
     print(top_idx_mtx.shape)
 
@@ -95,8 +103,8 @@ def contruct_graph(train_url, vocabulary, output_path):
     #     distance_index.append(np.argsort(distance)[-10:-2])
     # distance_index = np.array(distance_index)
     # print(distance_index)
-    distance_index = top_idx_mtx.detach().cpu().numpy()
-
+    #distance_index = top_idx_mtx.detach().cpu().numpy()
+    distance_index = top_idx_mtx
     with open(output_path, 'wb') as f:
         pickle.dump(distance_index, f)
 
@@ -104,19 +112,20 @@ def contruct_graph(train_url, vocabulary, output_path):
 
 if __name__ == "__main__":
     # dict_path = "../data/wiki103/wiki103_keep-10000_dictionary.pkl"
-    vocab_save_path = "../data/others/wiki103.vocab"
     # get_vocab(dict_path, vocab_save_path)
     # train_bow_path = "../data/wiki103/wiki103_keep-10000_bows_train.mm"
     # test_bow_path = "../data/wiki103/wiki103_keep-10000_bows_test.mm"
-    train_feat_save_path = "../data/others/wiki103_train.feat"
+    train_feat_save_path = "../data/others/ag_news_train.feat"
     # test_feat_save_path = "../data/others/wiki103_test.feat"
     # get_bow_feat(train_bow_path, train_feat_save_path)
     # get_bow_feat(test_bow_path, test_feat_save_path)
 
-    dataset = "wiki103"
+    dataset = "ag_news"
     data_dir = "../data/others"
     vocabulary_path = os.path.join(data_dir, "{}.vocab".format(dataset))
-    vocabulary = load_vocab(vocab_save_path)
-    output_path = os.path.join(data_dir, "{}_train_neighbors.pickle".format(dataset))    
-    contruct_graph(train_feat_save_path, vocabulary, output_path)
+    vocabulary = load_vocab(vocabulary_path)
+    output_path = os.path.join(data_dir, "{}_train_neighbors.pickle".format(dataset))
+    device_id = 1
+    device = torch.device("cuda:{}".format(device_id))    
+    contruct_graph(train_feat_save_path, vocabulary, output_path, device)
     # contruct_graph()
